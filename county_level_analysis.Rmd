@@ -1,0 +1,146 @@
+---
+title: "County Level Presidential Election Analysis"
+author: "Thomas Bassine"
+date: "9/12/2020"
+output: html_document
+---
+
+## Reading in the data
+
+We will use two datasets for this analysis: 
+
+1. County level election results in presidential elections from 2000-2016, from the MIT Election Lab. 
+
+2. A 2013 NCHS (National Center for Health Statistics) dataset that classifies each county based on how urban or rural it is on a 6 point scale, with 1 being the most urban and 6 being the most rural.
+
+We will read the datasets in from GitHub, but here are links to the two datasets from the [MIT Election Lab](https://electionlab.mit.edu/data) and from the [NCHS](https://www.cdc.gov/nchs/data_access/urban_rural.htm).
+
+This is the code for reading in the data:
+```{R, echo=T, message = F}
+# Read in county level presidential election results:
+elec_res <- read.csv('https://raw.githubusercontent.com/tvbassine/pa_elections_analysis/master/countypres_2000-2016.csv', stringsAsFactors = F)
+# Read in urban/rural classification of counties:
+library(openxlsx) #you need to install this package if you haven't yet.
+urb_rur <- read.xlsx('https://raw.githubusercontent.com/tvbassine/pa_elections_analysis/master/NCHSURCodes2013.xlsx')
+```
+
+Join the urban/rural classification data to the election result data.
+```{R, echo=T, message = F}
+# Let's try using the FIPS.code to join the data:
+z <- merge(elec_res, urb_rur,
+           by.x = 'FIPS',
+           by.y = 'FIPS.code',
+           all.x = T,
+           all.y = T
+           )
+z <- z[!is.na(z$year),]
+
+#sum(is.na(z$`2013.code`))
+#View(z[is.na(z$`2013.code`),])
+#Viewing the counties that didn't match, we see that Alaska as a state doesn't have a FIPS code. We get some statewide write-in in CT, 'Maine UOCAVA' in ME. Most troublingly, 'Kansas City' in MO doesn't match, despite having a FIPS code of 36000
+
+#View(urb_rur[urb_rur$State.Abr. == 'MO',])
+#View(elec_res[elec_res$state_po == 'MO',])
+# The issue with Kansas City requires a little more study, but for now we will leave it out.
+```
+
+Let's get total votes by urban/rural code and year, for both dems and republicans.
+
+```{R, echo=T, message = F}
+library(dplyr)
+z$ur_code <- z$`2013.code`
+dem <- aggregate(candidatevotes ~ year + ur_code,
+                 data = z[z$party == 'democrat',],
+                 sum)
+dem$join_code <- paste(dem$year, '_', dem$ur_code, sep = '')
+dem <- dem %>%
+       rename(dem_votes = 'candidatevotes')
+rep <- aggregate(candidatevotes ~ year + ur_code,
+                 data = z[z$party == 'republican',],
+                 sum)
+rep$join_code <- paste(rep$year, '_', rep$ur_code, sep = '')
+rep <- rep %>%
+       rename(rep_votes = 'candidatevotes')
+x <- merge(dem, rep, by = 'join_code')
+x$dem_two_party <- x$dem_votes / (x$dem_votes + x$rep_votes)
+x$total_votes <- x$dem_votes + x$rep_votes
+
+# out <- aggregate(total_votes ~ year.x + ur_code.x, x, sum)
+```
+
+Let's group all the level 4 and smaller counties together and call them rural (or level 4 in our scheme).
+
+```{R, echo=T, message = F}
+y <- expand.grid(year = seq(2000,2016,4),
+                 county = 1:4)
+y$dem_votes <- 0
+y$rep_votes <- 0
+
+for(i in 1:15){
+  ind <- which(x$ur_code.x == y$county[i] & x$year.x == y$year[i])
+  y$dem_votes[i] <- x$dem_votes[ind]
+  y$rep_votes[i] <- x$rep_votes[ind]
+}
+
+for(i in 16:20){
+  ind <- which(x$ur_code.x >= 4 & x$year.x == y$year[i])
+  y$dem_votes[i] <- sum(x$dem_votes[ind])
+  y$rep_votes[i] <- sum(x$rep_votes[ind])
+}
+
+y$dem_two_party <- y$dem_votes / (y$dem_votes + y$rep_votes)
+```
+
+Some plotting, just for kicks:
+```{R, echo=T, message = F}
+plot(y$year[y$county == 1],
+     y$dem_two_party[y$county == 1],
+     ylim = c(.3,.7),
+     xaxt = 'n',
+     yaxt = 'n',
+     type = 'l',
+     lwd = 1.5,
+     col = 'blue',
+     ylab = 'Democrat Share of 2-Party Vote',
+     xlab = 'Year',
+     main = 'Democrat 2-Party Vote Share In Presidential Elections,\nBy County Type (2000-2016)')
+lines(y$year[y$county == 2],
+     y$dem_two_party[y$county == 2],
+     ylim = c(.3,.7),
+     xaxt = 'n',
+     yaxt = 'n',
+     type = 'l',
+     lwd = 1.5,
+     col = 'purple',
+     ylab = 'Democrat Share\n of 2-Party Vote',
+     xlab = 'Year')
+lines(y$year[y$county == 3],
+     y$dem_two_party[y$county == 3],
+     ylim = c(.3,.7),
+     xaxt = 'n',
+     yaxt = 'n',
+     type = 'l',
+     lwd = 1.5,
+     col = 'green',
+     ylab = 'Democrat Share\n of 2-Party Vote',
+     xlab = 'Year')
+lines(y$year[y$county == 4],
+     y$dem_two_party[y$county == 4],
+     ylim = c(.3,.7),
+     xaxt = 'n',
+     yaxt = 'n',
+     type = 'l',
+     lwd = 1.5,
+     col = 'red',
+     ylab = 'Democrat Share\n of 2-Party Vote',
+     xlab = 'Year')
+axis(1, seq(2000,2016, 4))
+axis(2, seq(.3,.7,.1))
+abline(h = 0.5, lty = 2)
+text(2004, .65, 'Large Central Metros (>1 Million)', col = 'blue')
+text(2012, .55, 'Large Fringe Metros (>1 Million)', col = 'purple')
+text(2012, .47, 'Medium Metros (250K - 1M)', col = 'green')
+text(2004, .4, 'Small Metros and Non-Metros (< 250K)', col = 'red')
+text(2004, .35, 'Data Sources: MIT Election Lab and 2013 NCHS Study', cex = .6)
+text(2004, .33, 'Plot by @tvbassine', cex = .6)
+```

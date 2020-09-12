@@ -1,0 +1,145 @@
+---
+title: "Rural and Urban Vote Split in PA"
+author: "Thomas Bassine"
+date: "9/10/2020"
+output: html_document
+---
+
+## Idea
+
+We want to look at swing states in the 2020 U.S. presidential election and see which areas in those states will be critical for determing the winner. In particular, we want to determine the relative importance of urban and rural areas in those states.
+
+## Pennsylvania
+
+Pennsylvania is often a battelground state with large implications for the winner of the presidential election. In 2016, that was the case again. Republican candidate Donald Trump surprised observers by winning PA by 0.7% despite the state voting twice for former President Barack Obama. In 2012, Mr. Obama carried the state by 5.4%, meaning there was a 6.1% shift towards the Republicans in one election cycle.
+
+Where did this shift occur and what lessons can we take from 2016?
+
+## Reading in the data
+
+We will use two datasets for this analysis: 
+
+1. County level election results in presidential elections from 2000-2016, from the MIT Election Lab. 
+
+2. A CDC dataset that classifies each county based on how urban or rural it is on a 6 point scale, with 1 being the most urban and 6 being the most rural.
+
+We will read the datasets in from GitHub, but here are links to the two datasets from the [MIT Election Lab](https://electionlab.mit.edu/data) and from the [U.S. CDC](https://www.cdc.gov/nchs/data_access/urban_rural.htm).
+
+This is the code for reading in the data:
+```{R, echo=T}
+# Read in county level presidential election results:
+elec_res <- read.csv('https://raw.githubusercontent.com/tvbassine/pa_elections_analysis/master/countypres_2000-2016.csv', stringsAsFactors = F)
+# Let's filter to PA only:
+elec_res <- elec_res[elec_res$state == 'Pennsylvania',]
+# Read in urban/rural classification of counties:
+library(openxlsx) #you need to install this package if you haven't yet.
+urb_rur <- read.xlsx('https://raw.githubusercontent.com/tvbassine/pa_elections_analysis/master/NCHSURCodes2013.xlsx')
+# Filter to PA:
+urb_rur <- urb_rur[urb_rur$State.Abr. == 'PA',]
+```
+
+## Getting the data ready for analysis
+
+Ok, now that we have the data read in, we want to get it in the right form for analyzing the Pennsylvania results by county. We are definitely going to want to join the urban/rural designations to the county level election results. 
+
+We also want to make one row for each result for a given county in a given year. Right now in the election data, we have multiple rows for each county, one for each of the candidates. The code below will do that.
+
+```{R, echo=T, message=F}
+# Create a new column to store county/year
+elec_res$county_year <- paste(elec_res$county, elec_res$year, sep = '_')
+# Create and single row with just the democrat and the republicna results for each county/year
+library(dplyr)
+dem <- elec_res %>% filter(party == 'democrat')
+rep <- elec_res %>% filter(party == 'republican')
+elec_res <- merge(dem, rep, by = 'county_year', all = T)
+# Because of our merger of the Dem and Rep data, we have a lot of duplicate columns. We'll use select to narrow down to the columns we need print some of the data so we can get a feel for it looks like.
+elec_res <- elec_res %>% 
+            select(county_year = 'county_year',
+                   year = 'year.x',
+                   state = 'state.x',
+                   state_po = 'state_po.x',
+                   county = 'county.x',
+                   FIPS = 'FIPS.x',
+                   dem_cand = 'candidate.x',
+                   dem_votes = 'candidatevotes.x',
+                   rep_cand = 'candidate.y',
+                   rep_votes = 'candidatevotes.y',
+                   total_votes = 'totalvotes.x')
+head(elec_res, 3)
+```
+
+Alright, now that we have the election data in a nice form (with each county result on just one row), let's join the urban/rural data onto it.
+
+```{R, echo=T, message=F}
+# One little thing we need to do is remove the word 'County' from the county names in urb_rur to get the formats to match
+urb_rur$County.name <- gsub(' County', '',urb_rur$County.name)
+# Merge to election data on county name. 'all.x = T' because we want to do a left join.
+elec_res <- merge(elec_res, urb_rur, 
+                  by.x = 'county',
+                  by.y = 'County.name',
+                  all.x = T)
+# The column we are renaming is the most recent urban/rural code from 2013.
+elec_res <- elec_res %>% 
+            rename(urb_rur_code = `2013.code`)
+```
+
+## Some basic analysis
+
+We start with a basic plot of how well the Democratic candidate did in PA each year since 2000. We see that the Dems won each election over this time period except for 2016, where they lost narrowly.
+
+```{R, echo=T, message=F}
+elec_res$dem_margin <- elec_res$dem_votes - elec_res$rep_votes
+out <- aggregate(dem_margin ~ year, data = elec_res, sum)
+plot(out$year, out$dem_margin, main = 'Democratic Margin in PA by Year',
+     type= 'b',
+     xlab = 'Year',
+     ylab = 'Democratic Vote Margin of Victory',
+     ylim = c(-100000, max(out)))
+abline(h = 0)
+```
+
+Next we want to break the PA data down at the urban/rural level. In the defintions of the CDC report, each county is given a designation from 1 to 6, with 1 being the most urban. The CDC describes their classification scheme as the following:
+
+1) Large Central Metro
+2) Large Fringe Metro
+3) Medium Metro
+4) Small Metro
+5) Micropolitan
+6) Non-Core
+ 
+
+```{R, echo=T, message=F}
+elec_res$Urban_Rural_Level = "1. Large Central Metro"
+elec_res$Urban_Rural_Level[elec_res$urb_rur_code == 2] <- "2. Large Fringe Metro"
+elec_res$Urban_Rural_Level[elec_res$urb_rur_code == 3] <- "3. Medium Metro"
+elec_res$Urban_Rural_Level[elec_res$urb_rur_code == 4] <- "4. Small Metro"
+elec_res$Urban_Rural_Level[elec_res$urb_rur_code == 5] <- "5. Micropolitan"
+elec_res$Urban_Rural_Level[elec_res$urb_rur_code == 6] <- "6. Non-Core"
+out <- aggregate(dem_margin ~ year + Urban_Rural_Level, data = elec_res, sum)
+library(ggplot2)
+p <- ggplot(data=out, aes(x=year, y=dem_margin, group=Urban_Rural_Level)) + geom_line(aes(color=Urban_Rural_Level)) +
+  geom_point() +
+  xlab('Year') + 
+  ylab('Dem Vote Margin') +
+  ggtitle('Dem Vote Margin in Urban and Rural PA over Time')
+p
+
+```
+
+
+We see from the graph that level 3 counties ("Medium Metro") swung the most away from Democrats in 2016 vs. 2012. There were also shifts in level 4,5, and 6 counties, the most rural. From a top-line perspective, there is no real shift away from Dems from the urban level 1 and level 2 counties.
+
+Let's see how much of the total vote actually comes from each county level. In 2016, for example, we see that there was a lot of vote in medium metro and large fringe metro counties.
+```{R, echo=T, message=F}
+# How many total votes in rural and urban areas in 2016?
+out <- aggregate(total_votes ~ urb_rur_code, 
+                 data = elec_res[elec_res$year ==2016,], 
+                 sum)
+print(out)
+```
+
+
+## Maps
+
+This kind of data lends itself to being displayed in maps, so let's try it. I will rely upon [this awesome tutorial from socviz.co](https://socviz.co/maps.html).
+
